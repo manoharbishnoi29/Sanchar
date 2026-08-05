@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SANCHAR - Chat App</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * { box-sizing: border-box; font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; }
+        body { background: #f0f2f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .auth-card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 90%; max-width: 380px; text-align: center; }
+        .auth-card h2 { margin-bottom: 20px; color: #6200ea; }
+        .auth-card input { width: 100%; padding: 12px; margin: 8px 0; border: 1px solid #ddd; border-radius: 6px; }
+        .auth-card button { width: 100%; padding: 12px; background: #6200ea; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; margin-top: 10px; }
+        .auth-card p { margin-top: 15px; font-size: 14px; color: #666; cursor: pointer; }
+
+        .chat-container { display: none; width: 100%; max-width: 900px; height: 90vh; background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); overflow: hidden; flex-direction: row; }
+        .sidebar { width: 35%; background: #f8f9fa; border-right: 1px solid #eee; display: flex; flex-direction: column; }
+        .sidebar-header { padding: 15px; background: #6200ea; color: white; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
+        .user-list { flex: 1; overflow-y: auto; }
+        .user-item { padding: 15px; border-bottom: 1px solid #eee; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+        .user-item:hover, .user-item.active { background: #e8eaf6; }
+        .unread-badge { background: #ff3d00; color: white; border-radius: 50%; padding: 2px 8px; font-size: 12px; font-weight: bold; }
+
+        .chat-area { width: 65%; display: flex; flex-direction: column; background: #fafafa; }
+        .chat-header { padding: 15px; background: #fff; border-bottom: 1px solid #eee; font-weight: bold; }
+        .messages { flex: 1; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        .msg { max-width: 70%; padding: 10px 14px; border-radius: 10px; font-size: 14px; position: relative; }
+        .msg.sent { background: #6200ea; color: white; align-self: flex-end; border-bottom-right-radius: 2px; }
+        .msg.received { background: #e0e0e0; color: #333; align-self: flex-start; border-bottom-left-radius: 2px; }
+        .msg .time { font-size: 10px; opacity: 0.7; margin-top: 4px; text-align: right; }
+        .chat-input { padding: 15px; background: white; border-top: 1px solid #eee; display: flex; gap: 10px; }
+        .chat-input input { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 20px; outline: none; }
+        .chat-input button { padding: 10px 20px; background: #6200ea; color: white; border: none; border-radius: 20px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <!-- Auth Section -->
+    <div id="authBox" class="auth-card">
+        <h2 id="authTitle">Sanchar Login</h2>
+        <input type="text" id="username" placeholder="User Name">
+        <input type="text" id="contact" placeholder="Mobile No." style="display:none;">
+        <input type="password" id="password" placeholder="Password">
+        <button onclick="handleAuth()" id="authBtn">Login</button>
+        <p onclick="toggleAuth()" id="toggleTxt">नया अकाउंट बनाएँ (Sign Up)</p>
+    </div>
+
+    <!-- Chat App Section -->
+    <div id="chatApp" class="chat-container">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <span id="myUsername">User</span>
+                <button onclick="logout()" style="background:transparent; border:1px solid white; color:white; padding:4px 8px; border-radius:4px; cursor:pointer;">Logout</button>
+            </div>
+            <div class="user-list" id="userList"></div>
+        </div>
+        <div class="chat-area">
+            <div class="chat-header" id="activeChatHeader">चैट करने के लिए कोई यूजर चुनें</div>
+            <div class="messages" id="messagesBox"></div>
+            <div class="chat-input" id="inputBox" style="display:none;">
+                <input type="text" id="messageInput" placeholder="मैसेज लिखें...">
+                <button onclick="sendMessage()">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let isSignUp = false;
+        let currentUser = null;
+        let activeUser = null;
+        let socket = null;
+
+        function toggleAuth() {
+            isSignUp = !isSignUp;
+            document.getElementById('authTitle').innerText = isSignUp ? 'Create Account' : 'Sanchar Login';
+            document.getElementById('contact').style.display = isSignUp ? 'block' : 'none';
+            document.getElementById('authBtn').innerText = isSignUp ? 'Sign Up' : 'Login';
+            document.getElementById('toggleTxt').innerText = isSignUp ? 'पहले से अकाउंट है? Login करें' : 'नया अकाउंट बनाएँ (Sign Up)';
+        }
+
+        async function handleAuth() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const contact = document.getElementById('contact').value;
+
+            const endpoint = isSignUp ? '/api/signup' : '/api/login';
+            const payload = isSignUp ? { username, contact, password } : { username, password };
+
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+
+            if (data.status === 'success') {
+                currentUser = data.user;
+                initChat();
+            } else {
+                alert(data.message);
+            }
+        }
+
+        function initChat() {
+            document.getElementById('authBox').style.display = 'none';
+            document.getElementById('chatApp').style.display = 'flex';
+            document.getElementById('myUsername').innerText = currentUser.username;
+
+            socket = io();
+            socket.emit('join', { user_id: currentUser.uid });
+
+            socket.on('receive_message', (msg) => {
+                if (activeUser && (msg.sender_id === activeUser.uid || msg.sender_id === currentUser.uid)) {
+                    appendMessage(msg);
+                }
+                loadUsers(); // अनरीड बैज अपडेट करने के लिए
+            });
+
+            loadUsers();
+        }
+
+        async function loadUsers() {
+            const res = await fetch(`/api/users?current_uid=${currentUser.uid}`);
+            const data = await res.json();
+            if (data.status === 'success') {
+                const list = document.getElementById('userList');
+                list.innerHTML = '';
+                data.users.forEach(u => {
+                    const div = document.createElement('div');
+                    div.className = `user-item ${activeUser && activeUser.uid === u.uid ? 'active' : ''}`;
+                    div.onclick = () => selectUser(u);
+                    
+                    const nameSpan = document.createElement('span');
+                    nameSpan.innerText = u.username;
+                    div.appendChild(nameSpan);
+
+                    // यदि मैसेज अनरीड है, तो 1 मार्क / रेड बैज दिखाएँ
+                    if (u.unread > 0) {
+                        const badge = document.createElement('span');
+                        badge.className = 'unread-badge';
+                        badge.innerText = u.unread;
+                        div.appendChild(badge);
+                    }
+
+                    list.appendChild(div);
+                });
+            }
+        }
+
+        async function selectUser(user) {
+            activeUser = user;
+            document.getElementById('activeChatHeader').innerText = user.username;
+            document.getElementById('inputBox').style.display = 'flex';
+            
+            // मैसेज लोड करें और अनरीड मार्क हटाएँ
+            const res = await fetch(`/api/messages?sender_id=${currentUser.uid}&receiver_id=${user.uid}`);
+            const data = await res.json();
+            
+            const msgBox = document.getElementById('messagesBox');
+            msgBox.innerHTML = '';
+            if (data.status === 'success') {
+                data.messages.forEach(appendMessage);
+            }
+            loadUsers(); // रेड बैज रिमूव करने के लिए सूची रिफ्रेश करें
+        }
+
+        function appendMessage(msg) {
+            const msgBox = document.getElementById('messagesBox');
+            const div = document.createElement('div');
+            div.className = `msg ${msg.sender_id === currentUser.uid ? 'sent' : 'received'}`;
+            div.innerHTML = `<div>${msg.message}</div><div class="time">${msg.timestamp}</div>`;
+            msgBox.appendChild(div);
+            msgBox.scrollTop = msgBox.scrollHeight;
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const msgText = input.value.trim();
+            if (!msgText || !activeUser) return;
+
+            socket.emit('private_message', {
+                sender_id: currentUser.uid,
+                receiver_id: activeUser.uid,
+                message: msgText
+            });
+
+            input.value = '';
+        }
+
+        function logout() {
+            location.reload();
+        }
+    </script>
+</body>
+</html>
